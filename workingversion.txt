@@ -1,0 +1,761 @@
+one:-
+import streamlit as st
+import cv2
+import numpy as np
+import pytesseract
+import json
+import re
+from PIL import Image
+from difflib import SequenceMatcher
+
+# Improved preprocessing with denoising
+def preprocess_image(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+    blurred = cv2.GaussianBlur(denoised, (5, 5), 0)
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
+    return thresh
+
+# Enhanced OCR with layout analysis
+def extract_text(image):
+    processed = preprocess_image(image)
+    custom_config = r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
+    extracted_text = pytesseract.image_to_string(processed, config=custom_config)
+    return extracted_text
+
+# Advanced item parsing with similarity checks
+class MenuParser:
+    def __init__(self):
+        self.price_pattern = re.compile(r'(\$?\d{1,3}(?:[.,]\d{2})?)')
+        self.category_keywords = {
+            'main': ['main', 'entree', 'curry', 'vindaloo', 'biryani'],
+            'dessert': ['dessert', 'sweet', 'ice cream', 'pastry'],
+            'appetizer': ['appetizer', 'starter', 'snack'],
+            'bread': ['naan', 'roti', 'bread'],
+            'drinks': ['drink', 'beverage', 'juice', 'lassi']
+        }
+        self.seen_items = set()
+        
+    def similarity(self, a, b):
+        return SequenceMatcher(None, a, b).ratio()
+    
+    def clean_item(self, text):
+        # Remove price mentions from item name
+        cleaned = re.sub(r'\$?\d+\.?\d*', '', text).strip()
+        # Remove special characters and normalize spaces
+        cleaned = re.sub(r'[^a-zA-Z ]', '', cleaned)
+        return ' '.join(cleaned.split())
+    
+    def parse_line(self, line):
+        line = line.replace('=', '').replace(':', ' ').strip()
+        prices = self.price_pattern.findall(line)
+        if not prices:
+            return None, None
+            
+        # Take last valid price in line
+        price = prices[-1].replace(' ', '').replace(',', '.')
+        if not price.startswith('$'):
+            price = f'${price}'
+            
+        # Extract item name before price
+        price_pos = line.rfind(prices[-1])
+        name = self.clean_item(line[:price_pos])
+        
+        return name, price
+    
+    def add_item(self, category, name, price):
+        # Deduplicate using similarity check
+        for seen in self.seen_items:
+            if self.similarity(name, seen) > 0.8:
+                return
+        if name and price:
+            category = category.lower()
+            self.seen_items.add(name)
+            return {"name": name.title(), "price": price}
+
+def parse_menu(lines):
+    parser = MenuParser()
+    menu = {cat: [] for cat in parser.category_keywords}
+    current_category = 'main'
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Category detection
+        lower_line = line.lower()
+        for cat, keywords in parser.category_keywords.items():
+            if any(kw in lower_line for kw in keywords):
+                current_category = cat
+                break
+
+        # Item processing
+        name, price = parser.parse_line(line)
+        if name and price:  # ✅ Ensure both name and price are not None
+            item = parser.add_item(current_category, name, price)
+            if item:  # ✅ Ensure a valid item was added
+                menu[current_category].append(item)
+
+    return {k: v for k, v in menu.items() if v}  # ✅ Remove empty categories
+
+
+# Streamlit interface
+st.title("Advanced Menu Scanner 🍔")
+st.markdown("Upload a clear photo of restaurant menu")
+
+uploaded_file = st.file_uploader("Choose image...", type=["jpg", "png", "jpeg"])
+if uploaded_file:
+    image = np.array(Image.open(uploaded_file))
+    st.image(image, caption="Scanning Menu...", use_column_width=True)
+    
+    extracted_text = extract_text(image)
+    lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
+
+    # Improved restaurant info detection
+    restaurant = next((line for line in lines if re.search(r'\d{2,}[\w\s,]+', line)), "Unknown Restaurant")
+
+    # Fixed open_hours extraction with error handling
+    open_hours = "Not Found"
+    for line in lines:
+        if re.search(r'open|hours|time', line, re.I):
+            match = re.search(r'\d{1,2}[APMapm]{2}.*?\d{1,2}[APMapm]{2}', line)
+            if match:
+                open_hours = match.group()
+                break
+
+    menu_data = parse_menu(lines)
+
+    result = {
+        "restaurant": restaurant,
+        "open_hours": open_hours,
+        "menu": menu_data
+    }
+
+    st.subheader("Structured Menu Data")
+    st.json(result)
+
+    st.download_button(
+        "Download JSON",
+        json.dumps(result, indent=2),
+        "menu.json",
+        "application/json"
+    )
+expectedoutput:-
+{
+  "restaurant": "HOTEL NAME",
+  "open_hours": "Not Found",
+  "menu": {
+    "main": [
+      {"name": "Butter Chicken", "price": "$15"},
+      {"name": "Palak Paneer", "price": "$10"},
+      {"name": "Spicy Pork Vindaloo", "price": "$20"},
+      {"name": "Jerk Chicken", "price": "$25"}
+    ],
+    "dessert": [
+      {"name": "Butter Chicken", "price": "$15"},
+      {"name": "Palak Paneer", "price": "$10"},
+      {"name": "Spicy Pork Vindaloo", "price": "$20"}
+    ],
+    "drink": [
+      {"name": "Butter Chicken", "price": "$15"},
+      {"name": "Palak Paneer", "price": "$10"},
+      {"name": "Spicy Pork Vindaloo", "price": "$20"},
+      {"name": "Jerk Chicken", "price": "$25"}
+    ],
+    "additional": [
+      {"name": "Butter Chicken", "price": "$15"},
+      {"name": "Palak Paneer", "price": "$10"}
+    ]
+  }
+}
+twothree
+import streamlit as st
+import cv2
+import numpy as np
+import pytesseract
+import json
+import re
+from PIL import Image
+
+def preprocess_image(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    thresh = cv2.adaptiveThreshold(gray, 255, 
+                                  cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY, 11, 2)
+    return thresh
+
+def extract_text(image):
+    processed = preprocess_image(image)
+    custom_config = r'--oem 3 --psm 6'
+    return pytesseract.image_to_string(processed, config=custom_config)
+
+class MenuParser:
+    def __init__(self):
+        self.price_pattern = re.compile(r'(\$\d+\.?\d*|\d+\.?\d{2})\b')
+        self.categories = {
+            'main': ['main', 'course', 'curry', 'special'],
+            'dessert': ['dessert', 'sweet', 'ice cream'],
+            'drink': ['drink', 'beverage', 'juice', 'wine'],
+            'additional': ['extra', 'side', 'additional']
+        }
+        self.current_category = 'main'
+        self.menu = {cat: [] for cat in self.categories}
+
+    def clean_name(self, text):
+        # Remove price remnants and special characters
+        cleaned = re.sub(r'[\$\d\.]+', '', text)
+        cleaned = re.sub(r'[^a-zA-Z ]', ' ', cleaned)
+        words = [word for word in cleaned.strip().split() if len(word) > 2]
+        return ' '.join(words[:3]).title()  # Take first 3 meaningful words
+
+    def detect_category(self, line):
+        line_lower = line.lower()
+        for cat, keywords in self.categories.items():
+            if any(kw in line_lower for kw in keywords):
+                return cat
+        return None
+
+    def parse_line(self, line):
+        line = line.strip()
+        if not line:
+            return None, None
+
+        # Category detection
+        if (category := self.detect_category(line)):
+            self.current_category = category
+            return None, None
+
+        # Price extraction
+        price_match = re.search(self.price_pattern, line)
+        if not price_match:
+            return None, None
+            
+        price = price_match.group(1)
+        if '.' not in price:
+            price += ".00"
+        price = f"${float(price.replace('$', '')):.2f}"
+
+        # Name cleaning
+        name = self.clean_name(line.replace(price, ''))
+        return name, price
+
+    def add_item(self, name, price):
+        if name and not any(item['name'] == name for item in self.menu[self.current_category]):
+            self.menu[self.current_category].append({
+                "name": name,
+                "price": price
+            })
+
+def parse_menu(text):
+    parser = MenuParser()
+    for line in text.split('\n'):
+        name, price = parser.parse_line(line)
+        if name and price:
+            parser.add_item(name, price)
+    return parser.menu
+
+# Streamlit interface
+st.title("Professional Menu Scanner")
+uploaded_file = st.file_uploader("Upload Menu Image", type=["jpg", "png", "jpeg"])
+
+if uploaded_file:
+    image = np.array(Image.open(uploaded_file))
+    st.image(image, caption="Uploaded Menu", use_column_width=True)
+    
+    extracted_text = extract_text(image)
+    
+    # Detect restaurant name from first meaningful line
+    restaurant = next((line.strip() for line in extracted_text.split('\n') 
+                      if len(line.strip()) > 2 and not re.search(r'[\d\$]', line)), "HOTEL NAME")
+    
+    menu_data = parse_menu(extracted_text)
+    
+    result = {
+        "restaurant": restaurant,
+        "open_hours": "Not Found",
+        "menu": {k: v for k, v in menu_data.items() if v}
+    }
+    
+    st.json(result)
+    
+    st.download_button(
+        "Download JSON",
+        json.dumps(result, indent=2),
+        "menu.json",
+        "application/json"
+    )
+
+    threefour
+    import streamlit as st
+import cv2
+import numpy as np
+import pytesseract
+import json
+import re
+from PIL import Image
+from difflib import get_close_matches
+from collections import defaultdict, Counter
+
+def detect_columns(image):
+    """Detect columns in the menu image"""
+    # Convert to grayscale
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
+    
+    # Binarize the image
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Sum the pixel values along the horizontal axis
+    horizontal_projection = np.sum(binary, axis=0)
+    
+    # Normalize the projection
+    normalized = horizontal_projection / np.max(horizontal_projection)
+    
+    # Find potential column boundaries
+    width = binary.shape[1]
+    column_boundaries = []
+    in_gap = False
+    gap_start = 0
+    
+    # Threshold for detecting gaps (adjust as needed)
+    threshold = 0.1
+    min_gap_width = width * 0.05  # Minimum gap width (5% of image width)
+    
+    for i in range(width):
+        if normalized[i] < threshold and not in_gap:
+            in_gap = True
+            gap_start = i
+        elif normalized[i] >= threshold and in_gap:
+            in_gap = False
+            gap_end = i
+            if gap_end - gap_start > min_gap_width:
+                column_boundaries.append((gap_start, gap_end))
+    
+    # If no clear columns detected, try to split in half
+    if not column_boundaries:
+        mid_point = width // 2
+        return [(0, mid_point), (mid_point, width)]
+    
+    # Convert boundaries to columns
+    columns = []
+    last_end = 0
+    
+    for start, end in column_boundaries:
+        if start > last_end:
+            columns.append((last_end, start))
+        last_end = end
+    
+    if last_end < width:
+        columns.append((last_end, width))
+    
+    return columns
+
+def preprocess_image_segment(image_segment):
+    """Preprocess a segment of the image for better OCR"""
+    # Convert to grayscale if needed
+    if len(image_segment.shape) == 3:
+        gray = cv2.cvtColor(image_segment, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image_segment.copy()
+    
+    # Apply bilateral filter to reduce noise while preserving edges
+    bilateral = cv2.bilateralFilter(gray, 9, 75, 75)
+    
+    # Apply CLAHE for better contrast
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    clahe_img = clahe.apply(bilateral)
+    
+    # Apply adaptive thresholding
+    thresh = cv2.adaptiveThreshold(
+        clahe_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 15, 8
+    )
+    
+    # Invert if needed (check if more white than black)
+    if np.mean(thresh) < 127:
+        thresh = cv2.bitwise_not(thresh)
+    
+    # Apply morphological operations
+    kernel = np.ones((1, 1), np.uint8)
+    opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+    
+    return opening
+
+def extract_text_from_segment(image_segment, is_header=False):
+    """Extract text from an image segment with appropriate settings"""
+    processed = preprocess_image_segment(image_segment)
+    
+    # Use different PSM modes based on the segment type
+    if is_header:
+        config = r'--oem 3 --psm 4 -l eng --dpi 300'  # Single text line
+    else:
+        config = r'--oem 3 --psm 6 -l eng --dpi 300'  # Assume uniform text block
+    
+    return pytesseract.image_to_string(processed, config=config)
+
+def detect_horizontal_lines(image, min_length_ratio=0.3):
+    """Detect horizontal lines in the image to separate sections"""
+    # Convert to grayscale
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
+    
+    # Apply edge detection
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    
+    # Apply Hough Line Transform
+    min_length = int(image.shape[1] * min_length_ratio)  # Min line length as ratio of image width
+    lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=min_length, maxLineGap=10)
+    
+    horizontal_lines = []
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            # Check if line is horizontal (small y difference)
+            if abs(y2 - y1) < 10:
+                horizontal_lines.append((min(y1, y2), max(y1, y2)))
+    
+    # Sort by y-coordinate
+    horizontal_lines.sort()
+    
+    return horizontal_lines
+
+def segment_image(image):
+    """Segment the image into regions based on layout analysis"""
+    height, width = image.shape[:2]
+    
+    # Detect horizontal lines to separate sections
+    horizontal_lines = detect_horizontal_lines(image)
+    
+    # Detect columns
+    columns = detect_columns(image)
+    
+    # Define regions
+    regions = []
+    
+    # Add header region (top 15% of image)
+    header_height = int(height * 0.15)
+    regions.append(("header", (0, 0, width, header_height)))
+    
+    # If horizontal lines found, use them to define sections
+    if horizontal_lines:
+        prev_y = header_height
+        for i, (y1, y2) in enumerate(horizontal_lines):
+            mid_y = (y1 + y2) // 2
+            # For each column, create a region between lines
+            for j, (col_start, col_end) in enumerate(columns):
+                region_name = f"section_{i}_{j}"
+                regions.append((region_name, (col_start, prev_y, col_end, mid_y)))
+            prev_y = mid_y
+        
+        # Add final section after last line
+        for j, (col_start, col_end) in enumerate(columns):
+            region_name = f"section_{len(horizontal_lines)}_{j}"
+            regions.append((region_name, (col_start, prev_y, col_end, height)))
+    else:
+        # If no horizontal lines, just divide by columns
+        for j, (col_start, col_end) in enumerate(columns):
+            region_name = f"section_0_{j}"
+            regions.append((region_name, (col_start, header_height, col_end, height)))
+    
+    return regions
+
+def extract_text_from_regions(image):
+    """Extract text from different regions of the image"""
+    regions = segment_image(image)
+    region_texts = {}
+    
+    # Extract text from each region
+    for name, (x1, y1, x2, y2) in regions:
+        region_img = image[y1:y2, x1:x2]
+        is_header = name == "header"
+        
+        # Skip very small regions
+        if region_img.shape[0] < 10 or region_img.shape[1] < 10:
+            continue
+            
+        text = extract_text_from_segment(region_img, is_header)
+        region_texts[name] = text
+    
+    return region_texts
+
+def clean_text(text):
+    """Clean extracted text by removing noise and normalizing"""
+    # Remove non-printable characters
+    text = ''.join(c if c.isprintable() else ' ' for c in text)
+    
+    # Normalize whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove lines that are too short or contain only special characters
+    lines = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if len(line) > 2 and re.search(r'[a-zA-Z]', line):
+            lines.append(line)
+    
+    return '\n'.join(lines)
+
+class MenuParser:
+    def __init__(self):
+        # Common menu items for correction
+        self.common_items = {
+            'main': ['Butter Chicken', 'Palak Paneer', 'Spicy Pork Vindaloo', 'Jerk Chicken', 
+                    'Chicken Curry', 'Beef Steak', 'Grilled Salmon', 'Pasta Carbonara'],
+            'dessert': ['Ice Cream', 'Chocolate Cake', 'Cheesecake', 'Apple Pie', 'Tiramisu'],
+            'drink': ['Coca Cola', 'Pepsi', 'Orange Juice', 'Coffee', 'Tea', 'Wine', 'Beer'],
+            'additional': ['French Fries', 'Garlic Bread', 'Side Salad', 'Rice', 'Naan']
+        }
+        
+        # Price pattern with more variations
+        self.price_pattern = re.compile(r'(\$\s*\d+\.?\d*|\d+\.?\d{2})\s*$')
+        
+        # Category keywords with more variations
+        self.categories = {
+            'main': ['main', 'course', 'curry', 'special', 'food', 'entree', 'main food'],
+            'dessert': ['dessert', 'sweet', 'ice cream', 'cake', 'pudding'],
+            'drink': ['drink', 'beverage', 'juice', 'wine', 'cocktail', 'beer', 'coffee', 'tea'],
+            'additional': ['extra', 'side', 'additional', 'add on', 'supplement']
+        }
+        
+        self.current_category = 'main'
+        self.menu = defaultdict(list)
+        self.processed_items = set()  # Track processed items to avoid duplicates
+    
+    def detect_category(self, text):
+        """Detect menu category from text"""
+        text_lower = text.lower()
+        
+        # Check for category keywords
+        for category, keywords in self.categories.items():
+            if any(keyword in text_lower for keyword in keywords):
+                return category
+        
+        return None
+    
+    def extract_items_from_text(self, text, default_category=None):
+        """Extract menu items from text"""
+        if not text:
+            return
+            
+        lines = text.split('\n')
+        current_category = default_category or self.current_category
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check if this line is a category header
+            detected_category = self.detect_category(line)
+            if detected_category:
+                current_category = detected_category
+                continue
+            
+            # Try to extract price
+            price_match = re.search(self.price_pattern, line)
+            if not price_match:
+                # Try alternative price pattern
+                price_match = re.search(r'(\d+\.?\d*)', line)
+                if not price_match or float(price_match.group(1)) < 1:
+                    continue
+            
+            # Extract and clean price
+            price = price_match.group(1)
+            price = price.replace(' ', '').strip()
+            if not price.startswith('$'):
+                price = '$' + price
+            if '.' not in price:
+                price += ".00"
+            
+            try:
+                price_value = float(price.replace('$', ''))
+                price = f"${price_value:.2f}"
+            except ValueError:
+                continue
+            
+            # Extract name (text before price)
+            name_part = line[:price_match.start()].strip()
+            name = self.clean_name(name_part)
+            
+            if name:
+                # Create a unique identifier for this item
+                item_id = f"{name}_{price}"
+                
+                # Check if we've already processed this item
+                if item_id not in self.processed_items:
+                    self.menu[current_category].append({
+                        "name": name,
+                        "price": price
+                    })
+                    self.processed_items.add(item_id)
+    
+    def clean_name(self, text):
+        """Clean and normalize item names"""
+        if not text:
+            return None
+            
+        # Remove special characters and normalize
+        cleaned = re.sub(r'[^a-zA-Z\s]', ' ', text)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        # Remove common filler words
+        filler_words = ['and', 'with', 'the', 'our', 'for', 'from', 'of', 'to']
+        words = [word for word in cleaned.split() if len(word) > 1 and word.lower() not in filler_words]
+        
+        if not words:
+            return None
+        
+        # Take first 2-3 meaningful words for the name
+        name = ' '.join(words[:3]).title()
+        
+        # Try fuzzy matching with common items
+        for category, items in self.common_items.items():
+            matches = get_close_matches(name, items, n=1, cutoff=0.7)
+            if matches:
+                return matches[0]
+        
+        return name
+    
+    def get_menu(self):
+        """Get the final menu with non-empty categories"""
+        return {k: v for k, v in self.menu.items() if v}
+
+def detect_restaurant_name(image):
+    """Detect restaurant name from the image header"""
+    height, width = image.shape[:2]
+    
+    # Extract the top portion of the image
+    header_height = int(height * 0.15)
+    header_img = image[0:header_height, :]
+    
+    # Apply specific preprocessing for header text
+    gray = cv2.cvtColor(header_img, cv2.COLOR_BGR2GRAY) if len(header_img.shape) == 3 else header_img
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Try multiple PSM modes
+    configs = [
+        r'--oem 3 --psm 4 -l eng',  # Single text line
+        r'--oem 3 --psm 7 -l eng',  # Single text line
+        r'--oem 3 --psm 3 -l eng'   # Fully automatic page segmentation
+    ]
+    
+    candidates = []
+    
+    for config in configs:
+        text = pytesseract.image_to_string(binary, config=config)
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        
+        for line in lines:
+            # Filter out lines that are likely not the restaurant name
+            if (len(line) > 3 and len(line) < 30 and 
+                not re.search(r'[\d\$]', line) and 
+                not any(kw in line.lower() for kw in ['menu', 'food', 'drink', 'dessert'])):
+                # Clean the line
+                cleaned = re.sub(r'[^a-zA-Z\s]', ' ', line)
+                cleaned = re.sub(r'\s+', ' ', cleaned).strip().title()
+                if cleaned:
+                    candidates.append(cleaned)
+    
+    # Return the most common candidate or default
+    if candidates:
+        counter = Counter(candidates)
+        return counter.most_common(1)[0][0]
+    
+    return "HOTEL NAME"
+
+def process_menu_image(image):
+    """Process a menu image to extract structured data"""
+    # Extract text from different regions
+    region_texts = extract_text_from_regions(image)
+    
+    # Clean and combine texts
+    cleaned_texts = {region: clean_text(text) for region, text in region_texts.items()}
+    
+    # Detect restaurant name
+    restaurant_name = detect_restaurant_name(image)
+    
+    # Parse menu items
+    parser = MenuParser()
+    
+    # Process each region
+    for region, text in cleaned_texts.items():
+        # Determine default category based on region name
+        default_category = None
+        if 'section' in region:
+            # Try to infer category from text
+            for category, keywords in parser.categories.items():
+                if any(keyword in text.lower() for keyword in keywords):
+                    default_category = category
+                    break
+        
+        # Extract items from this region
+        parser.extract_items_from_text(text, default_category)
+    
+    # Get the final menu
+    menu = parser.get_menu()
+    
+    # Prepare result
+    result = {
+        "restaurant": restaurant_name,
+        "open_hours": "Not Found",
+        "menu": menu
+    }
+    
+    return result
+
+# Streamlit interface
+st.title("Professional Menu Scanner")
+st.write("Upload a menu image to extract items and prices")
+
+uploaded_file = st.file_uploader("Upload Menu Image", type=["jpg", "png", "jpeg"])
+
+if uploaded_file:
+    # Load and display image
+    pil_image = Image.open(uploaded_file)
+    image = np.array(pil_image)
+    st.image(image, caption="Uploaded Menu", use_column_width=True)
+    
+    # Process image with progress indicator
+    with st.spinner("Processing image..."):
+        # Process the menu image
+        result = process_menu_image(image)
+        
+        # Display results
+        st.subheader("Extracted Menu Data")
+        st.json(result)
+        
+        # Download option
+        st.download_button(
+            "Download JSON",
+            json.dumps(result, indent=2),
+            "menu.json",
+            "application/json"
+        )
+        
+        # Display statistics
+        total_items = sum(len(items) for items in result["menu"].values())
+        st.success(f"Successfully extracted {total_items} menu items across {len(result['menu'])} categories.")
+        
+        # Debug visualization
+        with st.expander("View Image Analysis"):
+            # Show column detection
+            columns = detect_columns(image)
+            col_img = image.copy()
+            for start, end in columns:
+                cv2.line(col_img, (start, 0), (start, image.shape[0]), (0, 255, 0), 2)
+                cv2.line(col_img, (end, 0), (end, image.shape[0]), (0, 255, 0), 2)
+            st.image(col_img, caption="Detected Columns", use_column_width=True)
+            
+            # Show regions
+            regions = segment_image(image)
+            region_img = image.copy()
+            for _, (x1, y1, x2, y2) in regions:
+                cv2.rectangle(region_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            st.image(region_img, caption="Detected Regions", use_column_width=True)
